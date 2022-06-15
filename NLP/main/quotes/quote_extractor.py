@@ -10,8 +10,8 @@ from multiprocessing import Pool, cpu_count
 
 import spacy
 from nltk import Tree
-from config import config
-import utils
+from .config import config
+from . import utils
 
 app_logger = utils.create_logger('quote_extractor', log_dir='logs', logger_level=logging.INFO, file_log_level=logging.INFO)
 

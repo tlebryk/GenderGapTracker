@@ -5,7 +5,7 @@ from datetime import datetime
 from logging.handlers import TimedRotatingFileHandler
 from urllib.request import urlparse
 
-import pymongo
+# import pymongo
 from bson import ObjectId
 
 
@@ -167,33 +167,33 @@ def preprocess_text(txt):
 
 
 # ========== DB functions ==========
-def init_client(MONGO_ARGS):
-    _db_client = pymongo.MongoClient(**MONGO_ARGS)
-    return _db_client
+# def init_client(MONGO_ARGS):
+#     _db_client = pymongo.MongoClient(**MONGO_ARGS)
+#     return _db_client
 
 
-def prepare_query(filters):
-    if filters['outlets']:
-        # Assumes that the user provided outlets as a comma-separated list
-        outlets = filters['outlets'].split(",")
-    else:
-        outlets = [
-            'National Post', 'The Globe And Mail', 'The Star', 'Huffington Post', 'Global News',
-            'CTV News', 'CBC News']
+# def prepare_query(filters):
+#     if filters['outlets']:
+#         # Assumes that the user provided outlets as a comma-separated list
+#         outlets = filters['outlets'].split(",")
+#     else:
+#         outlets = [
+#             'National Post', 'The Globe And Mail', 'The Star', 'Huffington Post', 'Global News',
+#             'CTV News', 'CBC News']
 
-    if filters['doc_id_list']:
-        doc_id_list = [ObjectId(x.strip()) for x in filters['doc_id_list'].split(",")]
-        query = {'_id': {'$in': doc_id_list}}
-    else:
-        query = {
-            '$and':
-                [
-                    {'outlet': {'$in': outlets}},
-                    {'body': {'$ne': ''}},
-                ] + filters['date_filters'] + filters['other_filters']
-        }
+#     if filters['doc_id_list']:
+#         doc_id_list = [ObjectId(x.strip()) for x in filters['doc_id_list'].split(",")]
+#         query = {'_id': {'$in': doc_id_list}}
+#     else:
+#         query = {
+#             '$and':
+#                 [
+#                     {'outlet': {'$in': outlets}},
+#                     {'body': {'$ne': ''}},
+#                 ] + filters['date_filters'] + filters['other_filters']
+#         }
 
-    return query
+#     return query
 
 
 # ========== Other functions ==========
