@@ -1,6 +1,11 @@
+This is a fork from https://github.com/sfu-discourse-lab/GenderGapTracker to make the quotation extraction part of the pipeline pip installable. 
+
+From `NLP/main` run `pip install .`  to create a package "quotes" which you can import as `from quotes import quote_extractor` and run `quote_extractor("1", doc)` where 1 is an arbitrary doc_id (does not get used but is legacy signature) and doc is a spacy doc from  `en_core_web_lg` (e.g. `nlp = spacy.load("en_core_web_lg"); doc = nlp('some text')`).
+
+
 __Status: V5.3__ (Code provided as-is; only sporadic updates expected).
 
-# The Gender Gap Tracker
+# The Gender Gap Tracker Previous
 
 This repo contains the code and framework used in our study on gender bias in the media. We present the [Gender Gap Tracker (GGT)](https://gendergaptracker.informedopinions.org/), an automated system that measures men and women’s voices on
 seven major Canadian news outlets in real time. We analyze the rich information in news articles using Natural Language Processing (NLP) and quantify the discrepancy in proportions of men and women quoted. Our larger goals through this project are
