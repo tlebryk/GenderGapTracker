@@ -9,12 +9,17 @@ from datetime import datetime, timedelta
 from multiprocessing import Pool, cpu_count
 
 import spacy
-from nltk import Tree
-from .config import config
-from . import utils
-
+# from nltk import Tree
+from config import config
+import utils
 app_logger = utils.create_logger('quote_extractor', log_dir='logs', logger_level=logging.INFO, file_log_level=logging.INFO)
+MONGO_ARGS = config['MONGO_ARGS']
+MAX_BODY_LENGTH = config['NLP']['MAX_BODY_LENGTH']
+print("Loading spaCy language model...")
+nlp = spacy.load('en_core_web_lg')
+print("Finished loading")
 
+write_quote_trees_in_file=False
 
 # Read quote verb list from file and store as a set for fast lookup
 with open(config['NLP']['QUOTE_VERBS'], 'r') as f:
@@ -457,6 +462,8 @@ def parse_input_files_only():
             doc_text = '\n'.join(doc_lines)
             doc_text = utils.preprocess_text(doc_text)
             doc = nlp(doc_text)
+            if not "write_quote_trees_in_file" in locals() and not "write_quote_trees_in_file" in globals():
+                write_quote_trees_in_file=False
             quotes = extract_quotes(doc_id=doc_id, doc=doc, write_tree=write_quote_trees_in_file)
 
             for q in quotes:
@@ -468,45 +475,84 @@ def parse_input_files_only():
     sys.exit(0)
 
 
-def parse_doc(collection, doc):
+def parse_doc_new(doc):
     """Perform quote extraction conditionally on one document"""
     try:
-        doc_id = str(doc['_id'])
+        doc_id = str(doc['Art_id'])
 
         if doc is None:
             app_logger.error('Document "{0}" not found.'.format(doc_id))
         else:
-            text = doc['body']
+            text = doc['Body']
             text_length = len(text)
             if text_length > MAX_BODY_LENGTH:
                 app_logger.warn(
-                    'Skipping document {0} due to long length {1} characters'.format(doc['_id'], text_length))
-                if update_db:
-                    collection.update(
-                        {'_id': ObjectId(doc_id)},
-                        {
-                            '$set': {
-                                'lastModifier': 'max_body_len',
-                                'lastModified': datetime.now()
-                            },
-                            '$unset': {
-                                'quotes': 1
-                            }
-                        },
-                        upsert=True
-                    )
+                    'Skipping document {0} due to long length {1} characters'.format(doc['Art_id'], text_length))
+                # if update_db:
+                #     collection.update(
+                #         {'_id': ObjectId(doc_id)},
+                #         {
+                #             '$set': {
+                #                 'lastModifier': 'max_body_len',
+                #                 'lastModified': datetime.now()
+                #             },
+                #             '$unset': {
+                #                 'quotes': 1
+                #             }
+                #         },
+                #         upsert=True
+                #     )
             # Process document
-            doc_text = utils.preprocess_text(doc['body'])
+            doc_text = utils.preprocess_text(text)
             spacy_doc = nlp(doc_text)
 
             quotes = extract_quotes(doc_id=doc_id, doc=spacy_doc, write_tree=write_quote_trees_in_file)
+            return quotes
+    except:
+        app_logger.exception("message")
+        traceback.print_exc()
+
+def parse_doc(collection, doc):
+    """Perform quote extraction conditionally on one document"""
+    try:
+        doc_id = str(doc['Art_id'])
+
+        if doc is None:
+            app_logger.error('Document "{0}" not found.'.format(doc_id))
+        else:
+            text = doc['Body']
+            text_length = len(text)
+            if text_length > MAX_BODY_LENGTH:
+                app_logger.warn(
+                    'Skipping document {0} due to long length {1} characters'.format(doc['Art_id'], text_length))
+                # if update_db:
+                #     collection.update(
+                #         {'_id': ObjectId(doc_id)},
+                #         {
+                #             '$set': {
+                #                 'lastModifier': 'max_body_len',
+                #                 'lastModified': datetime.now()
+                #             },
+                #             '$unset': {
+                #                 'quotes': 1
+                #             }
+                #         },
+                #         upsert=True
+                #     )
+            # Process document
+            doc_text = utils.preprocess_text(text)
+            spacy_doc = nlp(doc_text)
+
+            quotes = extract_quotes(doc_id=doc_id, doc=spacy_doc, write_tree=write_quote_trees_in_file)
+            return quotes
             if update_db:
-                collection.update(
-                    {'_id': ObjectId(doc_id)},
-                    {'$set': {
-                        'quotes': quotes,
-                        'lastModifier': 'quote_extractor',
-                        'lastModified': datetime.now()}})
+                pass
+                # collection.update(
+                #     {'_id': ObjectId(doc_id)},
+                #     {'$set': {
+                #         'quotes': quotes,
+                #         'lastModifier': 'quote_extractor',
+                #         'lastModified': datetime.now()}})
             else:
                 # If dry run, then display extracted quotes (for testing)
                 print('=' * 20, ' Quotes ', '=' * 20)
@@ -574,8 +620,7 @@ if __name__ == '__main__':
     args = vars(parser.parse_args())
 
     # ========== Parse config params and arguments ==========
-    MONGO_ARGS = config['MONGO_ARGS']
-    MAX_BODY_LENGTH = config['NLP']['MAX_BODY_LENGTH']
+
 
     DB_NAME = args['db']
     READ_COL = args['readcol']
