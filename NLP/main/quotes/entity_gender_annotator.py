@@ -10,7 +10,7 @@ import logging
 import re
 import traceback
 import urllib
-from bson import ObjectId
+# from bson import ObjectId
 from datetime import datetime, timedelta
 import requests
 from multiprocessing import Pool, cpu_count
@@ -20,24 +20,25 @@ import spacy
 from spacy.pipeline import EntityRuler
 from config import config
 import utils
-import thesisutils.utils
 import quote_extractor
 
-pub = thesisutils.utils.publications['hkfp']
-df = thesisutils.utils.standardize(thesisutils.utils.get_df(pub), pub)
 
-quotedf = thesisutils.utils.standardize(thesisutils.utils.read_df_s3(f"{pub.name}/quotes/quotes_full_edits_new716.csv"), pub, drop_dups=False)
-# %%
-doc = df.iloc[-8]
-quotes = quotedf.loc[lambda d: d.Art_id.eq(doc.Art_id)]
-quotes 
-# %%
-quotes = quotes[['speaker', 'speaker_index', 'quote', 'quote_index', 'verb', 'verb_index', 'quote_token_count', 'quote_type', 'is_floating_quote', 'Art_id']]
-q = quotes.copy()
-quotes = quotes.to_dict("records")
 app_logger = utils.create_logger('entity_gender_annotator_logger', log_dir='logs', logger_level=logging.INFO, file_log_level=logging.INFO)
+# %%
+MONGO_ARGS = config['MONGO_ARGS']
+AUTHOR_BLOCKLIST = config['NLP']['AUTHOR_BLOCKLIST']
+NAME_PATTERNS = config['NLP']['NAME_PATTERNS']
+MAX_BODY_LENGTH = config['NLP']['MAX_BODY_LENGTH']
+# %%
+print('Loading spaCy language model...')
+nlp = spacy.load('en_core_web_lg')
+# Add custom named entity rules for non-standard person names that spaCy doesn't automatically identify
+ruler = EntityRuler(nlp, overwrite_ents=True).from_disk(NAME_PATTERNS)
+nlp.add_pipe(ruler)
+print('Finished loading.')
 
-quotes = quote_extractor.parse_doc(None, doc)
+# coref = neuralcoref.NeuralCoref(nlp.vocab, max_dist=200)
+# nlp.add_pipe(coref, name='neuralcoref')
 
 # ========== Named Entity Merging functions ==========
 
@@ -352,8 +353,6 @@ def get_genders(session, names):
         data = {}
     return data
 
-x = update_existing_collection(None, doc, None)
-
 def update_existing_collection(collection, doc, session):
     """If user does not specify the `writecol` argument, write entity-gender results to existing collection."""
     # blame: Theo change
@@ -465,7 +464,7 @@ def parse_doc_new(doc):
     """THEO DEFINIED FN. 
     
     """
-    quotes = quote_extractor.parse_doc()
+    # quotes = quote_extractor.parse_doc()
     doc_id = str(doc['Art_id'])
     text = doc['Body']
     # Process authors
@@ -516,6 +515,7 @@ def parse_doc_new(doc):
     quotes = quote_extractor.extract_quotes(doc_id=doc_id, doc=doc_coref, write_tree=False)
 
     nes_quotes, quotes_no_nes, all_quotes = quote_assign(final_nes, quotes, doc_coref)
+    return all_quotes
     sources = list(nes_quotes.keys())
 
 def add_new_collection(collection, doc, session):
@@ -723,87 +723,83 @@ def run_pool(poolsize, chunksize):
 
 
 if __name__ == '__main__':
-    # Take in custom user-specified arguments if necessary (otherwise use defaults)
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--db', type=str, default='mediaTracker', help="Database name")
-    parser.add_argument('--readcol', type=str, default='media', help="Read collection name")
-    parser.add_argument('--writecol', type=str, default='', help="Write collection name")
-    parser.add_argument('--force_update', action='store_true', help="Overwrite already processed documents in database")
-    parser.add_argument('--limit', type=int, default=0, help="Max number of articles to process")
-    parser.add_argument('--genderapi_token', type=str, default=config['GENDER_RECOGNITION']['GENDERAPI_TOKEN'], help="Specify genderapi token")
-    parser.add_argument('--gr_ip', type=str, default=config['GENDER_RECOGNITION']['HOST'], help="Specify gender recognition host IP address")
-    parser.add_argument('--gr_port', type=int, default=config['GENDER_RECOGNITION']['PORT'], help="Specify gender recognition port number")
-    parser.add_argument('--begin_date', type=str, help="Start date of articles to process (YYYY-MM-DD)")
-    parser.add_argument('--end_date', type=str, help="End date of articles to process (YYYY-MM-DD)")
-    parser.add_argument("--outlets", type=str, help="Comma-separated list of news outlets to consider in query scope")
-    parser.add_argument('--ids', type=str, help="Comma-separated list of document ids to process. \
-                                                 By default, all documents in the collection are processed.")
-    parser.add_argument("--poolsize", type=int, default=cpu_count() + 1, help="Size of the concurrent process pool for the given task")
-    parser.add_argument("--chunksize", type=int, default=20, help="Number of articles IDs per chunk being processed concurrently")
+    from thesisutils import utils as ut
+    pub = ut.publications['hkfp']
+    # change to s3 later
+    df = ut.standardize(ut.get_df(pub) , pub)
+    print(df.head())
+    quotes = df.head().apply(parse_doc_new, axis=1)
+    print(quotes)
 
-    args = vars(parser.parse_args())
+
+    # Take in custom user-specified arguments if necessary (otherwise use defaults)
+    # parser = argparse.ArgumentParser()
+    # parser.add_argument('--db', type=str, default='mediaTracker', help="Database name")
+    # parser.add_argument('--readcol', type=str, default='media', help="Read collection name")
+    # parser.add_argument('--writecol', type=str, default='', help="Write collection name")
+    # parser.add_argument('--force_update', action='store_true', help="Overwrite already processed documents in database")
+    # parser.add_argument('--limit', type=int, default=0, help="Max number of articles to process")
+    # parser.add_argument('--genderapi_token', type=str, default=config['GENDER_RECOGNITION']['GENDERAPI_TOKEN'], help="Specify genderapi token")
+    # parser.add_argument('--gr_ip', type=str, default=config['GENDER_RECOGNITION']['HOST'], help="Specify gender recognition host IP address")
+    # parser.add_argument('--gr_port', type=int, default=config['GENDER_RECOGNITION']['PORT'], help="Specify gender recognition port number")
+    # parser.add_argument('--begin_date', type=str, help="Start date of articles to process (YYYY-MM-DD)")
+    # parser.add_argument('--end_date', type=str, help="End date of articles to process (YYYY-MM-DD)")
+    # parser.add_argument("--outlets", type=str, help="Comma-separated list of news outlets to consider in query scope")
+    # parser.add_argument('--ids', type=str, help="Comma-separated list of document ids to process. \
+    #                                              By default, all documents in the collection are processed.")
+    # parser.add_argument("--poolsize", type=int, default=cpu_count() + 1, help="Size of the concurrent process pool for the given task")
+    # parser.add_argument("--chunksize", type=int, default=20, help="Number of articles IDs per chunk being processed concurrently")
+
+    # args = vars(parser.parse_args())
 
     # ========== Parse config params and arguments ==========
-    MONGO_ARGS = config['MONGO_ARGS']
-    AUTHOR_BLOCKLIST = config['NLP']['AUTHOR_BLOCKLIST']
-    NAME_PATTERNS = config['NLP']['NAME_PATTERNS']
-    MAX_BODY_LENGTH = config['NLP']['MAX_BODY_LENGTH']
 
-    DB_NAME = args['db']
-    READ_COL = args['readcol']
-    WRITE_COL = args['writecol']
-    GENDER_IP = args['gr_ip']
-    GENDER_PORT = args['gr_port']
-    DOC_LIMIT = args['limit']
-    force_update = args['force_update']
-    poolsize = args['poolsize']
-    chunksize = args['chunksize']
 
-    date_begin = utils.convert_date(args['begin_date']) if args['begin_date'] else None
-    date_end = utils.convert_date(args['end_date']) if args['begin_date'] else None
+    # DB_NAME = args['db']
+    # READ_COL = args['readcol']
+    # WRITE_COL = args['writecol']
+    # GENDER_IP = args['gr_ip']
+    # GENDER_PORT = args['gr_port']
+    # DOC_LIMIT = args['limit']
+    # force_update = args['force_update']
+    # poolsize = args['poolsize']
+    # chunksize = args['chunksize']
 
-    date_filters = []
-    if date_begin:
-        date_filters.append({"publishedAt": {"$gte": date_begin}})
-    if date_end:
-        date_filters.append({"publishedAt": {"$lt": date_end + timedelta(days=1)}})
+    # date_begin = utils.convert_date(args['begin_date']) if args['begin_date'] else None
+    # date_end = utils.convert_date(args['end_date']) if args['begin_date'] else None
 
-    GENDER_RECOGNITION_SERVICE = 'http://{}:{}'.format(GENDER_IP, GENDER_PORT)
+    # date_filters = []
+    # if date_begin:
+    #     date_filters.append({"publishedAt": {"$gte": date_begin}})
+    # if date_end:
+    #     date_filters.append({"publishedAt": {"$lt": date_end + timedelta(days=1)}})
 
-    if force_update:
-        other_filters = [
-            {'quotes': {'$exists': True}}
-        ]
-    else:
-        other_filters = [
-            {'quotes': {'$exists': True}},
-            {'lastModifier': 'quote_extractor'},
-            {'quotesUpdated': {'$exists': False}}
-        ]
+    # GENDER_RECOGNITION_SERVICE = 'http://{}:{}'.format(GENDER_IP, GENDER_PORT)
 
-    doc_id_list = args['ids'] if args['ids'] else None
-    outlet_list = args['outlets'] if args['outlets'] else None
+    # if force_update:
+    #     other_filters = [
+    #         {'quotes': {'$exists': True}}
+    #     ]
+    # else:
+    #     other_filters = [
+    #         {'quotes': {'$exists': True}},
+    #         {'lastModifier': 'quote_extractor'},
+    #         {'quotesUpdated': {'$exists': False}}
+    #     ]
 
-    filters = {
-        'doc_id_list': doc_id_list,
-        'outlets': outlet_list,
-        'force_update': force_update,
-        'date_filters': date_filters,
-        'other_filters': other_filters
-    }
+    # doc_id_list = args['ids'] if args['ids'] else None
+    # outlet_list = args['outlets'] if args['outlets'] else None
 
-    blocklist = utils.get_author_blocklist(AUTHOR_BLOCKLIST)
+    # filters = {
+    #     'doc_id_list': doc_id_list,
+    #     'outlets': outlet_list,
+    #     'force_update': force_update,
+    #     'date_filters': date_filters,
+    #     'other_filters': other_filters
+    # }
 
-    print('Loading spaCy language model...')
-    nlp = spacy.load('en_core_web_lg')
-    # Add custom named entity rules for non-standard person names that spaCy doesn't automatically identify
-    ruler = EntityRuler(nlp, overwrite_ents=True).from_disk(NAME_PATTERNS)
-    nlp.add_pipe(ruler)
-    print('Finished loading.')
+    # blocklist = utils.get_author_blocklist(AUTHOR_BLOCKLIST)
 
-    coref = neuralcoref.NeuralCoref(nlp.vocab, max_dist=200)
-    nlp.add_pipe(coref, name='neuralcoref')
-
-    run_pool(poolsize, chunksize)
-    app_logger.info('Finished processing entities.')
+    # run_pool(poolsize, chunksize)
+    # app_logger.info('Finished processing entities.')
     
