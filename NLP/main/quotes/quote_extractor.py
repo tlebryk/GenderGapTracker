@@ -15,9 +15,9 @@ import utils
 app_logger = utils.create_logger('quote_extractor', log_dir='logs', logger_level=logging.INFO, file_log_level=logging.INFO)
 MONGO_ARGS = config['MONGO_ARGS']
 MAX_BODY_LENGTH = config['NLP']['MAX_BODY_LENGTH']
-print("Loading spaCy language model...")
-nlp = spacy.load('en_core_web_lg')
-print("Finished loading")
+# print("Loading spaCy language model...")
+# nlp = spacy.load('en_core_web_lg')
+# print("Finished loading")
 
 write_quote_trees_in_file=False
 
@@ -168,21 +168,23 @@ def is_qcqsv_or_qcqvs_csv(sent, quote_list):
     return False, None
 
 
-def extract_quotes(doc_id, doc, write_tree=False):
+def extract_quotes(doc_id, doc, write_tree=False, pubname=None):
     """ Steps to extract quotes in a document:
         1. Extract syntactic quotes
         2. Extract floating quotes
         3. Extract heuristic quotes (using custom rules)
+
+    :returns: list of dictionaries with quote info (speaker, verb etc. )
     """
-    syntactic_quotes = extract_syntactic_quotes(doc_id, doc, write_tree)
-    floating_quotes = extract_floating_quotes(doc, syntactic_quotes)
-    heuristic_quotes = extract_heuristic_quotes(doc)
+    syntactic_quotes = extract_syntactic_quotes(doc_id, doc, write_tree, pubname)
+    floating_quotes = extract_floating_quotes(doc, syntactic_quotes, doc_id, pubname)
+    heuristic_quotes = extract_heuristic_quotes(doc, doc_id, pubname)
     all_quotes = syntactic_quotes + floating_quotes + heuristic_quotes
     final_quotes = find_global_duplicates(all_quotes)
     return final_quotes
 
 
-def extract_syntactic_quotes(doc_id, doc, write_tree=False):
+def extract_syntactic_quotes(doc_id, doc, write_tree=False, pubname=None):
     """ Extract syntactic quotes. """
 
     quote_list = []
@@ -220,7 +222,10 @@ def extract_syntactic_quotes(doc_id, doc, write_tree=False):
                                         'verb_index': get_pretty_index(verb),
                                         'quote_token_count': len(sent),
                                         'quote_type': quote_type,
-                                        'is_floating_quote': False
+                                        'is_floating_quote': False,
+                                        'Art_id': doc_id,
+                                        'Publication': pubname
+
                                     }
                                     quote_list.append(quote_obj)
                                     if write_tree:
@@ -254,7 +259,9 @@ def extract_syntactic_quotes(doc_id, doc, write_tree=False):
                     'verb_index': get_pretty_index(expression),
                     'quote_token_count': len(sent),
                     'quote_type': "AccordingTo",
-                    'is_floating_quote': False
+                    'is_floating_quote': False,
+                    'Art_id': doc_id,
+                    'Publication': pubname,
                 }
                 quote_list.append(quote_obj)
                 if write_tree:
@@ -265,7 +272,7 @@ def extract_syntactic_quotes(doc_id, doc, write_tree=False):
     return quote_list
 
 
-def extract_heuristic_quotes(doc):
+def extract_heuristic_quotes(doc, doc_id=None, pubname=None):
     """Extract quotes that are enclosed between start and end quotation marks
     :param Doc doc: SpaCy Doc object of the whole news file
     :returns: List of quote objects containing the quotes and other information
@@ -305,7 +312,9 @@ def extract_heuristic_quotes(doc):
                         'verb_index': verb_index,
                         'quote_token_count': len(sent),
                         'quote_type': "Heuristic",
-                        'is_floating_quote': False
+                        'is_floating_quote': False,
+                        'Art_id': doc_id,
+                        'Publication': pubname
                     }
                     quote_list.append(quote_obj)
                 quote = False
@@ -377,7 +386,7 @@ def find_global_duplicates(quote_list):
     return final_quote_list
 
 
-def extract_floating_quotes(doc, syntactic_quotes):
+def extract_floating_quotes(doc, syntactic_quotes, doc_id=None, pubname=None):
     """ Extract floating quotes. """
     floating_quotes = []
     doc_sents = [x for x in doc.sents]
@@ -403,6 +412,10 @@ def extract_floating_quotes(doc, syntactic_quotes):
             if sent_is_after_qcqsv_or_qcqvs_csv and found_floating_quote:
                 floating_quote['speaker'] = last_quote['speaker']
                 floating_quote['speaker_index'] = last_quote['speaker_index']
+                floating_quote['Art_id'] = doc_id
+                floating_quote['Publication'] = pubname
+
+                
                 floating_quotes.append(floating_quote)
 
             last_sent = sent

@@ -5,23 +5,20 @@ except we need to escape the collection abstraction [comment out post collection
 
 
 """
-import argparse
 import logging
 import re
-import traceback
-import urllib
-# from bson import ObjectId
-from datetime import datetime, timedelta
-import requests
-from multiprocessing import Pool, cpu_count
+from itertools import chain
 
 import neuralcoref
+import pandas as pd
 import spacy
 from spacy.pipeline import EntityRuler
-from config import config
-import utils
-import quote_extractor
+from thesisutils import utils as ut
+from tqdm import tqdm
 
+import quote_extractor
+import utils
+from config import config
 
 app_logger = utils.create_logger('entity_gender_annotator_logger', log_dir='logs', logger_level=logging.INFO, file_log_level=logging.INFO)
 # %%
@@ -37,8 +34,23 @@ ruler = EntityRuler(nlp, overwrite_ents=True).from_disk(NAME_PATTERNS)
 nlp.add_pipe(ruler)
 print('Finished loading.')
 
-# coref = neuralcoref.NeuralCoref(nlp.vocab, max_dist=200)
-# nlp.add_pipe(coref, name='neuralcoref')
+coref = neuralcoref.NeuralCoref(nlp.vocab, max_dist=200)
+nlp.add_pipe(coref, name='neuralcoref')
+
+
+ner_filter = [
+    "DATE",
+    "WORK_OF_ART",
+    "PERCENT",
+    "QUANTITY",
+    "TIME",
+    "MONEY",
+    # "LAW",
+    "LANGUAGE"
+    "ORDINAL",
+    "CARDINAL",
+
+]
 
 # ========== Named Entity Merging functions ==========
 
@@ -283,523 +295,176 @@ def quote_assign(nes, quotes, doc_coref):
 
     return quote_nes, quote_no_nes, all_quotes
 
+def test_eq(idx):
+    doc = traindf.iloc[idx]
+    q1, ner1 = parse_doc_new(doc, pub, True)
+    q2, ner2 = parse_doc_new(doc, pub, False)
+    if q1 != q2:
+        print("SOMETHING WRONG quotes", doc.Art_id)
+        return None
+    if ner1 != ner2:
+        print("SOMETHING WRONG ner", doc.Art_id)
+        return None
+    print("all good ", idx)
 
-# TODO: How to consider quotes_no_nes in voices?
-def measure_voices(people_genders, nes_quotes, quotes_no_nes):
-    voice_females = 0
-    voice_males = 0
-    voice_unknowns = 0
-
-    for person, quotes in zip(nes_quotes.keys(), nes_quotes.values()):
-        gender = people_genders[person]
-
-        sum_of_quote_lengths = 0
-        for q in quotes:
-            sum_of_quote_lengths += q['quote_token_count']
-
-        if gender == 'female':
-            voice_females += sum_of_quote_lengths
-        elif gender == 'male':
-            voice_males += sum_of_quote_lengths
-        else:
-            voice_unknowns += sum_of_quote_lengths
-
-    return voice_females, voice_males, voice_unknowns
+# for i in range(0, -20, -1):
+#     print(i)
+#     test_eq(idx=i)
 
 
-# ========== Main functions ==========
-
-def get_pronoun_based_gender(unified_nes):
-    result_dict = {}
-    for person, mentions in zip(unified_nes.keys(), unified_nes.values()):
-        female_count = 0
-        male_count = 0
-        for mention in mentions:
-            if str(mention).lower() in ['she', 'her']:
-                female_count += 1
-            elif str(mention).lower() in ['he', 'his']:
-                male_count += 1
-
-        # Now we calculate final result
-        prob = 0
-        if male_count > female_count:
-            gender = 'male'
-            prob = male_count / (female_count + male_count)
-        elif female_count > male_count:
-            gender = 'female'
-            prob = female_count / (male_count + female_count)
-        else:
-            gender = 'unknown'  # in case of a tie or zero pronoun mentions
-            prob = 0
-
-        result_dict[person] = {'gender': gender, 'male_count': male_count, 'female_count': female_count,
-                               'probability': prob}
-
-    return result_dict
-
-
-def get_genders(session, names):
-    parsed_names = urllib.parse.quote(','.join(names))
-    url = "{0}/get-genders?people={1}".format(GENDER_RECOGNITION_SERVICE, parsed_names)
-    if parsed_names:
-        response = session.get(url)
-        if response:
-            data = response.json()
-        else:
-            code = response.status_code
-            app_logger.warning("Failed to retrieve valid JSON: status code {}".format(code))
-            data = {}
-    else:
-        data = {}
-    return data
-
-def update_existing_collection(collection, doc, session):
-    """If user does not specify the `writecol` argument, write entity-gender results to existing collection."""
-    # blame: Theo change
-    doc_id = str(doc['Art_id'])
-    text = doc['Body']
-
-    # Process authors
-    # cleaner = utils2.CleanAuthors(nlp)
-    # authors = cleaner.clean(doc['authors'], blocklist)
-    # author_genders = get_genders(session, authors)
-
-    # authors_female = []
-    # authors_male = []
-    # authors_unknown = []
-
-    # for person, gender in zip(author_genders.keys(), author_genders.values()):
-    #     if gender == 'female':
-    #         authors_female.append(person)
-    #     elif gender == 'male':
-    #         authors_male.append(person)
-    #     else:
-    #         if person:
-    #             authors_unknown.append(person)
-
-    # quotes should be from our quotedf 
-    # and should be filtered for that specific document. 
-    # quotes = doc['quotes']
-    text_preprocessed = utils.preprocess_text(text)
-    doc_coref = nlp(text_preprocessed)
-    unified_nes = merge_nes(doc_coref)
-    final_nes = remove_invalid_nes(unified_nes)
-    # Process people
-    people = list(final_nes.keys())
-    people = list(filter(None, people))  # Make sure no empty values are sent for gender prediction
-    # people_genders = get_genders(session, people)
-
-    # people_female = []
-    # people_male = []
-    # people_unknown = []
-    # for person, gender in zip(people_genders.keys(), people_genders.values()):
-    #     if gender == 'female':
-    #         people_female.append(person)
-    #     elif gender == 'male':
-    #         people_male.append(person)
-    #     else:
-    #         if person:
-    #             people_unknown.append(person)
-
-    # # Expert fields are filled base on gender of speakers in the quotes
-    # sources_female = []
-    # sources_male = []
-    # sources_unknown = []
-
-    nes_quotes, quotes_no_nes, all_quotes = quote_assign(final_nes, quotes, doc_coref)
-    sources = list(nes_quotes.keys())
-
-    for speaker in sources:
-        gender = people_genders[speaker]
-        if gender == 'female':
-            sources_female.append(speaker)
-        elif gender == 'male':
-            sources_male.append(speaker)
-        else:
-            if speaker:
-                sources_unknown.append(speaker)
-
-    voices_female, voices_male, voices_unknowns = measure_voices(people_genders, nes_quotes, quotes_no_nes)
-
-    article_type = utils.get_article_type(doc.get('url', ""))
-
-    collection.update(
-        {'_id': ObjectId(doc_id)},
-        {'$set': {
-            'people': people,
-            'peopleCount': len(people),
-            'peopleFemale': people_female,
-            'peopleFemaleCount': len(people_female),
-            'peopleMale': people_male,
-            'peopleMaleCount': len(people_male),
-            'peopleUnknown': people_unknown,
-            'peopleUnknownCount': len(people_unknown),
-            'sources': sources,
-            'sourcesCount': len(sources),
-            'sourcesFemale': sources_female,
-            'sourcesFemaleCount': len(sources_female),
-            'sourcesMale': sources_male,
-            'sourcesMaleCount': len(sources_male),
-            'sourcesUnknown': sources_unknown,
-            'sourcesUnknownCount': len(sources_unknown),
-            'authorsAll': authors,
-            'authorsMale': authors_male,
-            'authorsMaleCount': len(authors_male),
-            'authorsFemale': authors_female,
-            'authorsFemaleCount': len(authors_female),
-            'authorsUnknown': authors_unknown,
-            'authorsUnknownCount': len(authors_unknown),
-            'voicesFemale': voices_female,
-            'voicesMale': voices_male,
-            'voicesUnknown': voices_unknowns,
-            'quoteCount': len(quotes),
-            'speakersNotCountedInSources': len(quotes_no_nes),
-            'quotesUpdated': all_quotes,
-            'articleType': article_type,
-            'lastModifier': 'entity_gender_annotator',
-            'lastModified': datetime.now()}})
-
-
-def parse_doc_new(doc):
+def parse_doc_new(doc, pub, test=True):
     """THEO DEFINIED FN. 
     
     """
     # quotes = quote_extractor.parse_doc()
     doc_id = str(doc['Art_id'])
     text = doc['Body']
-    # Process authors
-    # cleaner = utils2.CleanAuthors(nlp)
-    # authors = cleaner.clean(doc['authors'], blocklist)
-    # author_genders = get_genders(session, authors)
-
-    # authors_female = []
-    # authors_male = []
-    # authors_unknown = []
-
-    # for person, gender in zip(author_genders.keys(), author_genders.values()):
-    #     if gender == 'female':
-    #         authors_female.append(person)
-    #     elif gender == 'male':
-    #         authors_male.append(person)
-    #     else:
-    #         if person:
-    #             authors_unknown.append(person)
-
-    # quotes = doc['quotes']
     text_preprocessed = utils.preprocess_text(text)
-    doc_coref = nlp(text_preprocessed)
+    # doc_coref = ut.timeit(nlp, text_preprocessed)
+    # Going with these disabled after testing found no difference with full pipeline
+    if test:
+        doc_coref = nlp(text_preprocessed, disable=[ "tok2vec",  "attribute_ruler", "lemmatizer"]) #"parser","tagger",
+    else:
+        doc_coref = nlp(text_preprocessed)
+    ents = doc_coref.ents
+    dct_ls = []
+    for ent in ents:
+        if ent.label_ not in ner_filter:
+            dct = {
+
+                "entity" : ent.text,
+                "label_" : ent.label_,
+                # "label" : ent.label,
+                "start" : ent.start,
+                "end" : ent.end,
+                "start_char" : ent.start_char,
+                "end_char" : ent.end_char,
+                "Art_id": doc["Art_id"],
+                "publication": pub.name,
+                # "year": year,
+            }
+            dct_ls.append(dct)
+    # return dct_ls
     unified_nes = merge_nes(doc_coref)
     final_nes = remove_invalid_nes(unified_nes)
 
-    # Process people
-    people = list(final_nes.keys())
-    people = list(filter(None, people))  # Make sure no empty values are sent for gender prediction
-    # people_genders = get_genders(session, people)
+    quotes = quote_extractor.extract_quotes(doc_id=doc_id, doc=doc_coref, write_tree=False, pubname=pub.name)
+    # all_quotes is list of dictionaries of quotes with named_entity and named_entity_type.
+    _, _, all_quotes = quote_assign(final_nes, quotes, doc_coref)
+    return all_quotes, dct_ls
 
-    # people_female = []
-    # people_male = []
-    # people_unknown = []
-    # for person, gender in zip(people_genders.keys(), people_genders.values()):
-    #     if gender == 'female':
-    #         people_female.append(person)
-    #     elif gender == 'male':
-    #         people_male.append(person)
-    #     else:
-    #         if person:
-    #             people_unknown.append(person)
+def gen_ner_quotes(pub, df):
+    quotes, ners = [], []
+    df.Body = df.Body.astype(str).str[:10000]
+    with tqdm(total=df.shape[0]) as pbar: 
+        for i, row in df.iterrows():
+            pbar.update(1)
+            quote, ner = parse_doc_new(row[['Art_id', 'Body', "Publication"]], pub)
+            quotes.append(quote)
+            ners.append(ner)
+    ners_unnest = chain(*ners)
+    nerdf = pd.DataFrame(ners_unnest)
+    quotes_unnest = chain(*quotes)
+    quotedf = pd.DataFrame(quotes_unnest)
+    quotedf.index = quotedf.index.set_names(["quid"])
+    quotedf = quotedf.reset_index()
+    nerdf.index = nerdf.index.set_names(["ner_index"])
+    nerdf = nerdf.reset_index()
+    return nerdf, quotedf
+# NERS = []
+# QUOTES = []
+# def parse_doc_global(doc, pub):
+#     """THEO DEFINIED FN. 
+    
+#     """
+#     global NERS, QUOTES
+#     # quotes = quote_extractor.parse_doc()
+#     doc_id = str(doc['Art_id'])
+#     text = doc['Body']
+#     text_preprocessed = utils.preprocess_text(text)
+#     # doc_coref = ut.timeit(nlp, text_preprocessed)
+#     doc_coref = nlp(text_preprocessed)
+#     ents = doc_coref.ents
+#     dct_ls = []
+#     for ent in ents:
+#         if ent.label_ not in ner_filter:
+#             dct = {
 
-    # Expert fields are filled base on gender of speakers in the quotes
-    # sources_female = []
-    # sources_male = []
-    # sources_unknown = []
-    quotes = quote_extractor.extract_quotes(doc_id=doc_id, doc=doc_coref, write_tree=False)
+#                 "entity" : ent.text,
+#                 "label_" : ent.label_,
+#                 # "label" : ent.label,
+#                 "start" : ent.start,
+#                 "end" : ent.end,
+#                 "start_char" : ent.start_char,
+#                 "end_char" : ent.end_char,
+#                 pub.uidcol: doc["Art_id"],
+#                 "publication": pub.name,
+#                 # "year": year,
+#             }
+#             NERS.append(dct)
+#     # return dct_ls
+#     unified_nes = merge_nes(doc_coref)
+#     final_nes = remove_invalid_nes(unified_nes)
 
-    nes_quotes, quotes_no_nes, all_quotes = quote_assign(final_nes, quotes, doc_coref)
-    return all_quotes
-    sources = list(nes_quotes.keys())
-
-def add_new_collection(collection, doc, session):
-    """If user specifies the `writecol` argument, write entity-gender results to a new collection."""
-    doc_id = str(doc['Art_id'])
-    text = doc['Body']
-    # Process authors
-    # cleaner = utils2.CleanAuthors(nlp)
-    # authors = cleaner.clean(doc['authors'], blocklist)
-    # author_genders = get_genders(session, authors)
-
-    # authors_female = []
-    # authors_male = []
-    # authors_unknown = []
-
-    # for person, gender in zip(author_genders.keys(), author_genders.values()):
-    #     if gender == 'female':
-    #         authors_female.append(person)
-    #     elif gender == 'male':
-    #         authors_male.append(person)
-    #     else:
-    #         if person:
-    #             authors_unknown.append(person)
-
-    # quotes = doc['quotes']
-    text_preprocessed = utils.preprocess_text(text)
-    doc_coref = nlp(text_preprocessed)
-    unified_nes = merge_nes(doc_coref)
-    final_nes = remove_invalid_nes(unified_nes)
-
-    # Process people
-    people = list(final_nes.keys())
-    people = list(filter(None, people))  # Make sure no empty values are sent for gender prediction
-    # people_genders = get_genders(session, people)
-
-    # people_female = []
-    # people_male = []
-    # people_unknown = []
-    # for person, gender in zip(people_genders.keys(), people_genders.values()):
-    #     if gender == 'female':
-    #         people_female.append(person)
-    #     elif gender == 'male':
-    #         people_male.append(person)
-    #     else:
-    #         if person:
-    #             people_unknown.append(person)
-
-    # Expert fields are filled base on gender of speakers in the quotes
-    # sources_female = []
-    # sources_male = []
-    # sources_unknown = []
-
-    nes_quotes, quotes_no_nes, all_quotes = quote_assign(final_nes, quotes, doc_coref)
-    sources = list(nes_quotes.keys())
-
-    # Now we need a way to store this information... 
-    # we want all_quotes.
-
-
-    # for speaker in sources:
-    #     gender = people_genders[speaker]
-    #     if gender == 'female':
-    #         sources_female.append(speaker)
-    #     elif gender == 'male':
-    #         sources_male.append(speaker)
-    #     else:
-    #         if speaker:
-    #             sources_unknown.append(speaker)
-
-    # voices_female, voices_male, voices_unknowns = measure_voices(people_genders, nes_quotes, quotes_no_nes)
-
-    # article_type = utils.get_article_type(doc.get('url', ""))
-
-    # collection.insert_one(
-    #     {
-    #         'currentId': ObjectId(doc_id),
-    #         'people': people,
-    #         'peopleCount': len(people),
-    #         'peopleFemale': people_female,
-    #         'peopleFemaleCount': len(people_female),
-    #         'peopleMale': people_male,
-    #         'peopleMaleCount': len(people_male),
-    #         'peopleUnknown': people_unknown,
-    #         'peopleUnknownCount': len(people_unknown),
-    #         'sources': sources,
-    #         'sourcesCount': len(sources),
-    #         'sourcesFemale': sources_female,
-    #         'sourcesFemaleCount': len(sources_female),
-    #         'sourcesMale': sources_male,
-    #         'sourcesMaleCount': len(sources_male),
-    #         'sourcesUnknown': sources_unknown,
-    #         'sourcesUnknownCount': len(sources_unknown),
-    #         'authorsAll': authors,
-    #         'authorsMale': authors_male,
-    #         'authorsMaleCount': len(authors_male),
-    #         'authorsFemale': authors_female,
-    #         'authorsFemaleCount': len(authors_female),
-    #         'authorsUnknown': authors_unknown,
-    #         'authorsUnknownCount': len(authors_unknown),
-    #         'voicesFemale': voices_female,
-    #         'voicesMale': voices_male,
-    #         'voicesUnknown': voices_unknowns,
-    #         'quoteCount': len(quotes),
-    #         'speakersNotCountedInSources': len(quotes_no_nes),
-    #         'quotesUpdated': all_quotes,
-    #         'articleType': article_type,
-    #         'lastModifier': 'entity_gender_annotator',
-    #         'lastModified': datetime.now(),
-    #     }
-    # )
-
-
-def update_db(read_collection, write_collection, doc, session):
-    """Write entity-gender annotation results to a new collection OR update the existing collection.
-    """
-    doc_id = str(doc['_id'])
-    try:
-        text = doc['body']
-        text_length = len(text)
-        if text_length > MAX_BODY_LENGTH:
-            app_logger.warn(
-                'Skipping document {0} due to long length {1} characters'.format(doc_id, text_length))
-            read_collection.update(
-                {'_id': ObjectId(doc_id)},
-                {'$unset': {
-                    'people': 1,
-                    'peopleCount': 1,
-                    'peopleFemale': 1,
-                    'peopleFemaleCount': 1,
-                    'peopleMale': 1,
-                    'peopleMaleCount': 1,
-                    'peopleUnknown': 1,
-                    'peopleUnknownCount': 1,
-                    'sources': 1,
-                    'sourcesCount': 1,
-                    'sourcesFemale': 1,
-                    'sourcesFemaleCount': 1,
-                    'sourcesMale': 1,
-                    'sourcesMaleCount': 1,
-                    'sourcesUnknown': 1,
-                    'sourcesUnknownCount': 1,
-                    'authorsAll': 1,
-                    'authorsMale': 1,
-                    'authorsMaleCount': 1,
-                    'authorsFemale': 1,
-                    'authorsFemaleCount': 1,
-                    'authorsUnknown': 1,
-                    'authorsUnknownCount': 1,
-                    'voicesFemale': 1,
-                    'voicesMale': 1,
-                    'voicesUnknown': 1,
-                    'quoteCount': 1,
-                    'speakersNotCountedInSources': 1,
-                    'quotesUpdated': 1,
-                    'articleType': 1,
-                    'lastModifier': 'max_body_len',
-                    'lastModified': datetime.now()}})
-        else:
-            if WRITE_COL:
-                add_new_collection(write_collection, doc, session)
-            else:
-                update_existing_collection(read_collection, doc, session)
-
-    except:
-        app_logger.exception("message")
-        traceback.print_exc()
-
-
-def chunker(iterable, chunksize):
-    """Yield a smaller chunk of a large iterable"""
-    for i in range(0, len(iterable), chunksize):
-        yield iterable[i:i + chunksize]
-
-
-def parse_chunks(chunk):
-    """Pass through a chunk of document IDs and extract quotes"""
-    db_client = utils.init_client(MONGO_ARGS)
-    read_collection = db_client[DB_NAME][READ_COL]
-    write_collection = db_client[DB_NAME][WRITE_COL] if WRITE_COL else None
-    # Create requests session object for more persistent HTTP connections
-    session = requests.Session()
-    for idx in chunk:
-        doc = read_collection.find_one({'_id': idx}, no_cursor_timeout=True)
-        update_db(read_collection, write_collection, doc, session)
-
-
-def run_pool(poolsize, chunksize):
-    """Concurrently perform quote extraction based on a filter query"""
-    # Find ALL ids in the database within the query bounds (one-time only)
-    client = utils.init_client(MONGO_ARGS)
-    id_collection = client[DB_NAME][READ_COL]
-    query = utils.prepare_query(filters)
-    document_ids = id_collection.find(query, no_cursor_timeout=True).distinct('_id')
-    app_logger.info("Obtained ID list for {} articles.".format(len(document_ids)))
-
-    # Check for doc limit
-    if DOC_LIMIT > 0:
-        document_ids = document_ids[:DOC_LIMIT]
-    app_logger.info("Processing {} articles...".format(len(document_ids)))
-
-    # Process quotes using a pool of executors 
-    pool = Pool(processes=poolsize)
-    pool.map(parse_chunks, chunker(document_ids, chunksize=chunksize))
-    pool.close()
+#     quotes = quote_extractor.extract_quotes(doc_id=doc_id, doc=doc_coref, write_tree=False, pubname=pub.name)
+#     # all_quotes is list of dictionaries of quotes with named_entity and named_entity_type.
+#     nes_quotes, quotes_no_nes, all_quotes = quote_assign(final_nes, quotes, doc_coref)
+#     QUOTES += all_quotes
+#     # return all_quotes, dct_ls
 
 
 if __name__ == '__main__':
-    from thesisutils import utils as ut
-    pub = ut.publications['hkfp']
-    # change to s3 later
-    df = ut.standardize(ut.get_df(pub) , pub)
-    print(df.head())
-    quotes = df.head().apply(parse_doc_new, axis=1)
-    print(quotes)
+    pub = ut.publications['nyt']
+    # need some flexibility bc might need to read in yearly dfs
+    # take a shortcut and cut really long articles
+    df = ut.standardize(ut.read_df_s3(None, pubdefault=pub) , pub)
+    tts = "train"
+    train = ut.read_df_s3(f"{pub}/tts_mask/{tts}_main1.csv")
+    train = ut.standardize(train, pub)
+    trainmask = df.Art_id.isin(train.Art_id)
+    traindf = ut.drop_report(df,trainmask)
+    tts = "test"
+    test = ut.read_df_s3(f"{pub}/tts_mask/{tts}_main1.csv")
+    test = ut.standardize(test, pub)
+    testmask = df.Art_id.isin(test.Art_id)
+    testdf = ut.drop_report(df,testmask)
+
+    tts = "train"
+    # just remember to multi index later on. 
+    nerdf, quotedf = gen_ner_quotes(pub, traindf)
+    ut.df_to_s3(nerdf, f"{pub.name}/ner/ner_{tts}2.csv")
+    ut.df_to_s3(quotedf, f"{pub.name}/quotes/quotes_{tts}2.csv")
+
+    tts = "test"
+    # just remember to multi index later on. 
+    nerdf, quotedf = gen_ner_quotes(pub, testdf)
+    ut.df_to_s3(nerdf, f"{pub.name}/ner/ner_{tts}2.csv")
+    ut.df_to_s3(quotedf, f"{pub.name}/quotes/quotes_{tts}2.csv")
 
 
-    # Take in custom user-specified arguments if necessary (otherwise use defaults)
-    # parser = argparse.ArgumentParser()
-    # parser.add_argument('--db', type=str, default='mediaTracker', help="Database name")
-    # parser.add_argument('--readcol', type=str, default='media', help="Read collection name")
-    # parser.add_argument('--writecol', type=str, default='', help="Write collection name")
-    # parser.add_argument('--force_update', action='store_true', help="Overwrite already processed documents in database")
-    # parser.add_argument('--limit', type=int, default=0, help="Max number of articles to process")
-    # parser.add_argument('--genderapi_token', type=str, default=config['GENDER_RECOGNITION']['GENDERAPI_TOKEN'], help="Specify genderapi token")
-    # parser.add_argument('--gr_ip', type=str, default=config['GENDER_RECOGNITION']['HOST'], help="Specify gender recognition host IP address")
-    # parser.add_argument('--gr_port', type=int, default=config['GENDER_RECOGNITION']['PORT'], help="Specify gender recognition port number")
-    # parser.add_argument('--begin_date', type=str, help="Start date of articles to process (YYYY-MM-DD)")
-    # parser.add_argument('--end_date', type=str, help="End date of articles to process (YYYY-MM-DD)")
-    # parser.add_argument("--outlets", type=str, help="Comma-separated list of news outlets to consider in query scope")
-    # parser.add_argument('--ids', type=str, help="Comma-separated list of document ids to process. \
-    #                                              By default, all documents in the collection are processed.")
-    # parser.add_argument("--poolsize", type=int, default=cpu_count() + 1, help="Size of the concurrent process pool for the given task")
-    # parser.add_argument("--chunksize", type=int, default=20, help="Number of articles IDs per chunk being processed concurrently")
-
-    # args = vars(parser.parse_args())
-
-    # ========== Parse config params and arguments ==========
 
 
-    # DB_NAME = args['db']
-    # READ_COL = args['readcol']
-    # WRITE_COL = args['writecol']
-    # GENDER_IP = args['gr_ip']
-    # GENDER_PORT = args['gr_port']
-    # DOC_LIMIT = args['limit']
-    # force_update = args['force_update']
-    # poolsize = args['poolsize']
-    # chunksize = args['chunksize']
+# def globaldict_way():
+#     NERS = []
+#     QUOTES = []
+#     for i, row in df.iterrows():
+#         print(i)
+#         parse_doc_global(row[['Art_id', 'Body', "Publication"]], pub)
+#         if i > 4: 
+#             break
+#     y = pd.DataFrame(NERS)
+#     z = pd.DataFrame(QUOTES)
+#     return y, z
+# def globaldict_apply():
+#     NERS = []
+#     QUOTES = []
+#     df[['Art_id', 'Body', "Publication"]].head().apply(parse_doc_global, pub=pub, axis=1)
+#     y = pd.DataFrame(NERS)
+#     z = pd.DataFrame(QUOTES)
+#     return y, z
 
-    # date_begin = utils.convert_date(args['begin_date']) if args['begin_date'] else None
-    # date_end = utils.convert_date(args['end_date']) if args['begin_date'] else None
-
-    # date_filters = []
-    # if date_begin:
-    #     date_filters.append({"publishedAt": {"$gte": date_begin}})
-    # if date_end:
-    #     date_filters.append({"publishedAt": {"$lt": date_end + timedelta(days=1)}})
-
-    # GENDER_RECOGNITION_SERVICE = 'http://{}:{}'.format(GENDER_IP, GENDER_PORT)
-
-    # if force_update:
-    #     other_filters = [
-    #         {'quotes': {'$exists': True}}
-    #     ]
-    # else:
-    #     other_filters = [
-    #         {'quotes': {'$exists': True}},
-    #         {'lastModifier': 'quote_extractor'},
-    #         {'quotesUpdated': {'$exists': False}}
-    #     ]
-
-    # doc_id_list = args['ids'] if args['ids'] else None
-    # outlet_list = args['outlets'] if args['outlets'] else None
-
-    # filters = {
-    #     'doc_id_list': doc_id_list,
-    #     'outlets': outlet_list,
-    #     'force_update': force_update,
-    #     'date_filters': date_filters,
-    #     'other_filters': other_filters
-    # }
-
-    # blocklist = utils.get_author_blocklist(AUTHOR_BLOCKLIST)
-
-    # run_pool(poolsize, chunksize)
-    # app_logger.info('Finished processing entities.')
-    
+# y, z = globaldict_apply()
+# y, z = globaldict_way()
+# %timeit  -r 5 globaldict_apply()
+# %timeit  -r 5 globaldict_way()
+# %timeit -r 5 iterrow_way()

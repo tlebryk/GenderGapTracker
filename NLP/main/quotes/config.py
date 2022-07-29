@@ -20,8 +20,8 @@ config = {
     },
     'NLP': {
         'MAX_BODY_LENGTH': 20000,
-        'AUTHOR_BLOCKLIST': os.path.join(Path(__file__), "../rules\author_blocklist.txt"),
-        'NAME_PATTERNS': os.path.join(Path(__file__), r'../rules\name_patterns.jsonl'),
-        'QUOTE_VERBS': os.path.join(Path(__file__), r'../rules\quote_verb_list.txt')
+        'AUTHOR_BLOCKLIST': os.path.join(os.path.dirname(Path(__file__)), r"rules/author_blocklist.txt"),
+        'NAME_PATTERNS': os.path.join(os.path.dirname(Path(__file__)), r'rules/name_patterns.jsonl'),
+        'QUOTE_VERBS': os.path.join(os.path.dirname(Path(__file__)), r'rules/quote_verb_list.txt')
     }
 }
